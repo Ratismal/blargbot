@@ -9,7 +9,8 @@
 
 const argFactory = require('../structures/ArgumentFactory'),
     af = argFactory,
-    bbEngine = require('../structures/bbtag/Engine');
+    bbEngine = require('../structures/bbtag/Engine'),
+    { BBTag, SubTag } = require('../structures/bbtag/Tag');
 
 async function executeTag(msg, tagName, command) {
     let tag = await r.table('tag').get(tagName).run();
@@ -375,50 +376,132 @@ function generateDebug(code, context) {
     };
 };
 
+/**
+ *
+ * @param {string} code
+ * @returns {AnalysisResult[]}
+ */
 function analyze(code) {
     let parsed = bbEngine.parse(code);
     if (!parsed.success) {
         return parsed.error;
     }
-    let subtags = getSubTags(parsed.bbtag);
-    let result = [];
+    return [...analyzeString(parsed.bbtag, [])];
+}
 
-    for (const subtag of subtags) {
-        let name = (subtag.children || [])[0];
-        if (!name || !name.content) {
-            result.push({
-                subtag,
-                error: 'Unnamed subtag'
-            });
-        } else if (name.children.length > 0) {
-            result.push({
-                subtag,
-                warning: 'Dynamic subtag'
-            });
-        } else {
-            let definition = TagManager.get(name.content);
-            if (!definition) {
-                if (!name.content.toLowerCase().startsWith('func.'))
-                    result.push({
-                        subtag,
-                        error: `Unknown subtag {${name.content}}`
-                    });
-            } else if (definition.deprecated) {
-                result.push({
-                    subtag,
-                    warning: `{${name.content}} is deprecated` + (typeof definition.deprecated === 'string'
-                        ? `. Please use {${definition.deprecated}} instead`
-                        : '')
-                });
-            }
+/** 
+ * @typedef {Object} AnalysisResult 
+ * @property {SubTag} subtag
+ * @property {string} [error]
+ * @property {string} [warning]
+ * */
+
+
+/**
+ * 
+ * @param {BBTag} bbtag
+ * @param {string[]} parents
+ * @returns {IterableIterator<AnalysisResult>}
+ */
+function* analyzeString(bbtag, parents) {
+    for (const child of bbtag.children) {
+        yield* analyzeSubtag(child, parents);
+    }
+}
+
+/**
+ * 
+ * @param {SubTag} subtag
+ * @param {string[]} parents
+ * @returns {IterableIterator<AnalysisResult>}
+ */
+function* analyzeSubtag(subtag, parents) {
+    const name = subtag.name;
+    if (!name || !name.content) {
+        yield { subtag, error: 'Unnamed subtag' };
+        for (const child of subtag.children) {
+            yield* analyzeString(child, parents);
+        }
+        return;
+    } else if (name.children.length > 0) {
+        yield { subtag, warning: 'Dynamic subtag' };
+        for (const child of subtag.children) {
+            yield* analyzeString(child, parents);
+        }
+        return;
+    }
+
+    const nameStr = name.content.toLowerCase();
+    if (nameStr === '//') { return; }
+
+    if (['lock'].includes(nameStr) && parents.includes('lock')) {
+        yield { subtag, error: '{lock} subtags cannot be nested' };
+    } else if (TagManager.get('waitmessage').overrideSubtags.includes(nameStr)) {
+        const parent = parents.find(n => ['waitmessage', 'waitreact', 'filter'].includes(n));
+        if (parent) {
+            yield { subtag, error: `Cannot use {${nameStr}} inside of {${parent}}` };
         }
     }
 
-    return result;
+    const definition = findSubtag(nameStr, parents);
+
+    if (!definition) {
+        yield { subtag, error: `Unknown subtag {${name.content}}` };
+    } else if (definition.deprecated) {
+        yield {
+            subtag,
+            warning: `{${nameStr}} is deprecated` + (typeof definition.deprecated === 'string'
+                ? `. Please use {${definition.deprecated}} instead`
+                : '')
+        };
+    }
+
+
+    parents.push(nameStr);
+    for (const child of subtag.children) {
+        yield* analyzeString(child, parents);
+    }
+    parents.pop();
+}
+
+/**
+ * @param {string} name
+ * @param {string[]} parents
+ * @returns {{deprecated: boolean} | undefined}
+ */
+function findSubtag(name, parents) {
+    const definition = TagManager.get(name);
+    if (definition) {
+        return definition;
+    }
+    if (name.startsWith('func.')) {
+        return { deprecated: false };
+    }
+    if (['params', 'paramsarray', 'paramslength'].includes(name) && parents.some(p => p === 'func' || p === 'function')) {
+        return { deprecated: false };
+    }
+}
+
+/**
+ * 
+ * @param {SubTag} subtag
+ * @param {(name: string) => boolean} check
+ * @returns {boolean}
+ */
+function findParent(subtag, check) {
+    while (subtag.parent && subtag.parent.parent) {
+        subtag = subtag.parent.parent;
+        const name = subtag.children[0];
+        if (!name) { continue; }
+        if (check(name.content)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function addAnalysis(code, baseText) {
-    let analysis = bbtag.analyze(code);
+    let analysis = analyze(code);
     if (typeof analysis === 'string') {
         baseText += `\n${analysis}`;
     } else {
@@ -433,18 +516,6 @@ function addAnalysis(code, baseText) {
     }
 
     return baseText;
-}
-
-function getSubTags(bbstring) {
-    return bbstring.children.reduce(function (accumulator, part) {
-        if (typeof part !== 'string') {
-            accumulator.push(part);
-            for (const arg of part.children) {
-                accumulator.push(...getSubTags(arg));
-            }
-        }
-        return accumulator;
-    }, []);
 }
 
 function viewErrors(...errors) {

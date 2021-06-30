@@ -5,6 +5,7 @@ const { Range } = require('../Position');
 
 /**
  * This represents a block of text within the BBTag language.
+ * @template T
  */
 class BaseTag {
 
@@ -34,23 +35,18 @@ class BaseTag {
     */
     get content() { return this.source.slice(this.start, this.end); }
     /** 
-     * @type {BBTag?}
+     * @type {T?}
      * The tag which this tag is contained within
      * */
     get parent() { return this._protected.parent; }
     /** 
-     * @type {SubTag[]}
+     * @type {T[]}
      * All the tags contained withinin this tag
      * */
     get children() { return this._protected.children; }
 
-    /** @param {string|BaseTag} parent The parent of this tag */
+    /** @param {string|T} parent The parent of this tag */
     constructor(parent) {
-        /**
-         * The protected properties of this tag
-         * @type {BaseTagProtected}
-         * @protected
-         */
         this._protected = {
             children: []
         };
@@ -66,8 +62,11 @@ class BaseTag {
 /**
  * This represents a recognized subtag structure. Subtags are strings starting and ending with {}
  * And contain sections of BBTag delimited by ;
+ * @extends {BaseTag<BBTag>}
  */
 class SubTag extends BaseTag {
+    get name() { return this.children[0]; }
+
     /**
      * Attempts to create a SubTag object from the given values.
      * @param {BBTag} parent The parent to use for creation of this SubTag instance
@@ -89,11 +88,9 @@ class SubTag extends BaseTag {
     }
 
 
-    /** @param {string|SubTag} parent */
+    /** @param {string|BBTag} parent */
     constructor(parent) {
         super(parent);
-        /** @type {BaseTag|string} */
-        this.name = this.children[0];
     }
 
     /**
@@ -123,6 +120,7 @@ class SubTag extends BaseTag {
 /**
  * This represents both the top level text, and the contents of each argument in a subtag.
  * A subtag is a block of text between and including a {} pair, with arguments delimited by ;
+ * @extends {BaseTag<SubTag>}
  */
 class BBTag extends BaseTag {
     /**
