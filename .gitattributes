@@ -1,0 +1,5 @@
+# Use unix style line endings
+* text eol=lf
+
+# Dont modify binary files
+*.png binary
